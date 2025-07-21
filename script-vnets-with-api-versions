@@ -1,0 +1,34 @@
+#!/bin/bash
+
+echo "Fetching all VNets..."
+
+vnets=$(az resource list --resource-type "Microsoft.Network/virtualNetworks" --query "[].{name:name, rg:resourceGroup, id:id}" -o json)
+
+echo "Checking deployment-time API versions from Activity Log..."
+
+echo "name,resourceGroup,apiVersion,timestamp" > vnet_api_versions.csv
+
+for row in $(echo "${vnets}" | jq -r '.[] | @base64'); do
+    _jq() {
+        echo "${row}" | base64 --decode | jq -r "${1}"
+    }
+
+    vnet_name=$(_jq '.name')
+    vnet_rg=$(_jq '.rg')
+
+    # Query Activity Log for the Create VNet event
+    api_version=$(az monitor activity-log list \
+        --resource-group "$vnet_rg" \
+        --max-events 20 \
+        --status "Succeeded" \
+        --resource "Microsoft.Network/virtualNetworks/$vnet_name" \
+        --query "[?contains(operationName.value, 'Write')].{time:eventTimestamp, api:properties.submissionTimestamp, data:properties}" \
+        -o json | jq -r '.[0].data.requestBody.apiVersion // "UNKNOWN"')
+
+    timestamp=$(az monitor activity-log list \
+        --resource-group "$vnet_rg" \
+        --max-events 20 \
+        --status "Succeeded" \
+        --resource "Microsoft.Network/virtualNetworks/$vnet_name" \
+        --query "[?contains(operationName.value, 'Write')].eventTimestamp" \
+        -o tsv | head -n 1)
